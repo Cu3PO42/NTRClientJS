@@ -1,0 +1,14 @@
+{
+  "name": "ntrclient",
+  "version": "0.1.0",
+  "description": "A library to talk to the NTR debugger on the 3DS.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Cu3PO42",
+  "license": "MIT",
+  "dependencies": {
+    "pullstream": "^1.0.0"
+  }
+}
