@@ -1,19 +1,25 @@
 import { connect } from 'net';
 import PullStream from 'pullstream';
+import Promise from 'bluebird';
 
-class NtrClient {
+PullStream.prototype.pullAsync = Promise.promisify(PullStream.prototype.pull);
+
+export class NtrClient {
   seqNumber = 0;
   canSendHeartbeat = true;
+  promises = {};
 
   constructor(ip, connectedCallback, disconnectedCallback) {
-    this.sock = connect(5000, ip, connectedCallback);
+    this.sock = connect(8000, ip, connectedCallback);
     this.sock.setNoDelay(true);
-    this.sock.on('close', disconnectedCallback);
+    if (typeof disconnectedCallback === 'function') {
+      this.sock.on('close', disconnectedCallback);
+    }
 
     this.stream = new PullStream();
     this.sock.pipe(this.stream);
 
-    this.stream.pull(84, this.handleData);
+    this.handleData();
   }
 
   disconnect() {
@@ -22,36 +28,29 @@ class NtrClient {
 
   // Receiving stuff
 
-  handleData = (err, data) => {
-    if (err) {
-      return;
-    }
+  async handleData() {
+    const cmdBuf = await this.stream.pullAsync(84);
 
-    const magic = data.readUInt32LE(0);
-    const seq = data.readUInt32LE(4);
-    const type = data.readUInt32LE(8);
-    const cmd = data.readUInt32LE(12);
-    const args = new Uint32Array(data.buffer, data.byteOffset + 16, 16);
-    const dataLen = data.readUInt32LE(80);
+    const magic = cmdBuf.readUInt32LE(0);
+    const seq = cmdBuf.readUInt32LE(4);
+    const type = cmdBuf.readUInt32LE(8);
+    const cmd = cmdBuf.readUInt32LE(12);
+    const args = new Uint32Array(cmdBuf.buffer, cmdBuf.byteOffset + 16, 16);
+    const dataLen = cmdBuf.readUInt32LE(80);
 
     if (magic != 0x12345678) {
       return;
     }
 
     if (dataLen !== 0) {
-      this.stream.pull(dataLen, (err, data) => {
-        this.stream.pull(84, this.handleData);
-
-        if (!err) {
-          this.handlePacket(cmd, seq, data);
-        }
-      });
+      const data = await this.stream.pullAsync(dataLen);
+      this.handlePacket(cmd, seq, data);
     } else {
-      this.stream.pull(84, this.handleData);
       this.handlePacket(cmd, seq, undefined);
     }
 
-    this.canSendHeartbeat = 1;
+    this.canSendHeartbeat = 1; // TODO only do this as response to heartbeats
+    this.handleData();
   }
 
   handlePacket(cmd, seq, data) {
@@ -68,15 +67,15 @@ class NtrClient {
   sendPacket(type, cmd, args = [], dataLen) {
     this.seqNumber += 1000;
 
-    const buf = new Uint32Array(21);
-    buf[0] = 0x12345678;
-    buf[1] = seqNumber;
-    buf[2] = type;
-    buf[3] = cmd;
+    const buf = new Buffer(84);
+    buf.writeUInt32LE(0x12345678, 0);
+    buf.writeUInt32LE(this.seqNumber, 4);
+    buf.writeUInt32LE(type, 8);
+    buf.writeUInt32LE(cmd, 12);
     for (let i = 0; i < Math.min(16, args.length); ++i) {
-      buf[4 + i] = args[i];
+      buf.writeUInt32LE(args[i], 4 * (4 + i));
     }
-    buf[20] = dataLen;
+    buf.writeUInt32LE(dataLen, 20);
     this.sock.write(buf);
   }
 
@@ -100,6 +99,8 @@ class NtrClient {
     if (this.canSendHeartbeat) {
       this.canSendHeartbeat = false;
       this.sendPacket(0, 0, undefined, 0);
+
+      // TODO return
     }
   }
 
@@ -138,6 +139,11 @@ class NtrClient {
     // TODO figure out return
   }
 
+  listThreads(pid) {
+    this.sendPacket(0, 7, [pid], 0);
+    // TODO return
+  }
+
   attachToProcess(pid, patchAddr = 0) {
     this.sendPacket(0, 6, [pid, patchAddr], 0);
   }
@@ -149,10 +155,11 @@ class NtrClient {
 
   getMemlayout(pid) {
     this.sendPacket(0, 8, [pid], 0);
+    // TODO return
   }
 }
 
-export default function connect(ip, disconnectedCallback) {
+export default function connectNTR(ip, disconnectedCallback) {
   return new Promise((resolve) => {
     const client = new NtrClient(ip, () => {
       resolve(client);

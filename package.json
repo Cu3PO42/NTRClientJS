@@ -4,11 +4,17 @@
   "description": "A library to talk to the NTR debugger on the 3DS.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile": "babel ./src --out-dir ./lib"
   },
   "author": "Cu3PO42",
   "license": "MIT",
   "dependencies": {
+    "bluebird": "^3.3.5",
     "pullstream": "^1.0.0"
+  },
+  "devDependencies": {
+    "babel-cli": "^6.8.0",
+    "babel-preset-es2015-node": "^6.0.1",
+    "babel-preset-stage-0": "^6.5.0"
   }
 }
