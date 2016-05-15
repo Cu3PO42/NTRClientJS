@@ -10,8 +10,13 @@ export class NtrClient {
   promises = {};
 
   constructor(ip, connectedCallback, disconnectedCallback) {
-    this.sock = connect(8000, ip, connectedCallback);
-    this.sock.setNoDelay(true);
+    this.sock = connect(8000, ip, () => {
+      this.sock.setNoDelay(true);
+      this.sock.setKeepAlive(true);
+      if (typeof connectedCallback === 'function') {
+        connectedCallback();
+      }
+    });
     if (typeof disconnectedCallback === 'function') {
       this.sock.on('close', disconnectedCallback);
     }
