@@ -2,7 +2,7 @@
   "name": "ntrclient",
   "version": "0.1.0",
   "description": "A library to talk to the NTR debugger on the 3DS.",
-  "main": "index.js",
+  "main": "lib/ntrclient.js",
   "scripts": {
     "compile": "babel ./src --out-dir ./lib"
   },
