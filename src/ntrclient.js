@@ -15,11 +15,11 @@ export class NtrClient {
       this.sock.setKeepAlive(true);
 
       this.heartbeatId = setInterval(this.heartbeat.bind(this), 1000);
-
-      if (typeof connectedCallback === 'function') {
-        connectedCallback();
-      }
     });
+
+    if (typeof connectedCallback === 'function') {
+      this.connectedCallback = connectedCallback;
+    }
 
     if (typeof disconnectedCallback === 'function') {
       this.sock.on('close', disconnectedCallback);
@@ -60,6 +60,11 @@ export class NtrClient {
         this.handlePacket(cmd, seq, undefined);
       }
 
+      if (this.connectedCallback) {
+        this.connectedCallback();
+        this.connectedCallback = undefined;
+      }
+
       this.handleData();
     } catch(e) {
       this.disconnect();
@@ -74,16 +79,7 @@ export class NtrClient {
           break;
         }
         const { type } = this.promises[seq];
-        let lines;
-        if (data === undefined) {
-          lines = [];
-        } else {
-          let string = data.toString();
-          if (string.startsWith('rtRecvSocket failed: 00000000')) {
-            string = string.slice(29);
-          }
-          lines = string.match(/^.+$/gm);
-        }
+        const lines = data !== undefined ? data.toString().match(/^.+$/gm) : [];
         switch(type) {
           case 'processes':
             this.handleProcesses(seq, lines);
