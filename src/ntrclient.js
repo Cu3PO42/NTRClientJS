@@ -62,6 +62,8 @@ export class NtrClient {
 
       this.handleData();
     } catch(e) {
+      console.log('error in handleData: ');
+      console.log(e);
       this.disconnect();
     }
   }
@@ -70,8 +72,11 @@ export class NtrClient {
     switch (cmd) {
       case 0:
         this.canSendHeartbeat = true;
-        const lines = data.toString().match(/^.+$/gm);
+        if (this.promises[seq] === undefined) {
+          break;
+        }
         const { type } = this.promises[seq];
+        const lines = data !== undefined ? data.toString().match(/^.+$/gm) : [];
         switch(type) {
           case 'processes':
             this.handleProcesses(seq, lines);
@@ -146,7 +151,7 @@ export class NtrClient {
         }
         const pc = parseInt(m[1], 16);
         const lr = parseInt(m[2], 16);
-        const data = lines[i + 1].split(' ');
+        const data = lines[i + 2].split(' ');
         const dataBuf = Buffer.alloc(128);
         for (let j = 0; j < 32; ++j) {
           const val = parseInt(data[j], 16);
@@ -158,7 +163,7 @@ export class NtrClient {
         res.threads.push({ tid, pc, lr, data: dataBuf });
       }
 
-      if (lines[i++] !== 'recommended pc:') {
+      if (lines[i++] !== 'recommend pc:') {
         throw null;
       }
 
@@ -166,7 +171,7 @@ export class NtrClient {
         res.recommendedPc.push(parseInt(lines[i], 16));
       }
 
-      if (lines[i++] !== 'recommended lr:') {
+      if (lines[i++] !== 'recommend lr:') {
         throw null;
       }
 
@@ -187,13 +192,13 @@ export class NtrClient {
   handleMemlayout(seq, lines) {
     const { resolve, reject } = this.promises[seq];
     try {
-      if (lines[0] !== 'valid memregions:' || lines[line.length - 1] !== 'end of memlayout.') {
+      if (lines[0] !== 'valid memregions:' || lines[lines.length - 1] !== 'end of memlayout.') {
         throw null;
       }
 
       const regions = lines.slice(1, -1);
       resolve(regions.map(region => {
-        const m = region.match(/^([\da-f]{8}) - ([\da-f]{8}) , size: ([\da-f]{8}))$/);
+        const m = region.match(/^([\da-f]{8}) - ([\da-f]{8}) , size: ([\da-f]{8})$/);
         const start = parseInt(m[1], 16);
         const end = parseInt(m[2], 16);
         const size = parseInt(m[3], 16);
@@ -214,7 +219,7 @@ export class NtrClient {
 
       const handles = lines.slice(0, -1);
       resolve(handles.map(handle => {
-        const m = region.match(/^h: ([\da-f]{8}), p: ([\da-f]{8})$/);
+        const m = handle.match(/^h: ([\da-f]{8}), p: ([\da-f]{8})$/);
         const h = parseInt(m[1], 16);
         const p = parseInt(m[2], 16);
         return { h, p };
@@ -225,6 +230,10 @@ export class NtrClient {
   }
 
   handleReadMemory(seq, data) {
+    if (this.promises[seq] === undefined) {
+      return;
+    }
+
     const { resolve, reject } = this.promises[seq];
 
     if (data === undefined) {
