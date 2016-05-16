@@ -196,6 +196,27 @@ export class NtrClient {
     }
   }
 
+  handleMemlayout(seq, lines) {
+    const { resolve, reject } = this.promises[seq];
+    try {
+      if (lines[0] !== 'valid memregions:' || lines[line.length - 1] !== 'end of memlayout.') {
+        throw null;
+      }
+
+      const regions = lines.slice(1, -1);
+      resolve(regions.map(region => {
+        const m = region.match(/^([\da-f]{8}) - ([\da-f]{8}) , size: ([\da-f]{8}))$/);
+        const start = parseInt(m[1], 16);
+        const end = parseInt(m[2], 16);
+        const size = parseInt(m[3], 16);
+
+        return { start, end, size };
+      }));
+    } catch(e) {
+      reject(new Error('Response does not match expected format for memlayout.'));
+    }
+  }
+
   // Sending stuff
 
   sendPacket(type, cmd, args = [], dataLen) {
