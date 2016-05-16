@@ -90,13 +90,19 @@ export class NtrClient {
           case 'handle':
             this.handleHandles(seq, lines);
             break;
+          case 'hello':
+            this.handleHello(seq, lines);
+            break;
+          case 'memory':
+            this.handleReadMemoryText(seq, lines);
+            break;
           default:
-            this.promises[seq].reject(new Error('Unexpected message type.'));
+            this.promises[seq].reject(new Error(`No handler registered for ${type}.`));
             break;
         }
         break;
       case 9:
-        this.handleReadMemory(seq, data);
+        this.handleReadMemoryData(seq, data);
         break;
     }
 
@@ -115,7 +121,7 @@ export class NtrClient {
     const processes = lines.slice(0, -1);
     try {
       resolve(processes.map(proc => {
-        const m = proc.match(/^pid: 0x([\da-f]{8}), pname: *(\w+), tid: ([\da-f]{16}), kpobj: ([\da-f]{8})$/);
+        const m = proc.match(/^pid: 0x([\da-f]{8}), pname: *([^,]+), tid: ([\da-f]{16}), kpobj: ([\da-f]{8})$/);
 
         if (m === null) {
           throw new Error('Response does not match expected format for process list.');
@@ -229,12 +235,28 @@ export class NtrClient {
     }
   }
 
-  handleReadMemory(seq, data) {
-    if (this.promises[seq] === undefined) {
+  handleHello(seq, lines) {
+    const { resolve, reject } = this.promises[seq];
+
+    if (lines.length === 1 && lines[0] === 'hello') {
+      resolve();
+    } else {
+      reject(new Error('Unexpected reply to hello: ' + lines.join('\n')));
+    }
+  }
+
+  handleReadMemoryText(seq, lines) {
+    if (lines.length !== 1 || lines[0] !== 'finished') {
+      this.promises[seq].reject(new Error('Did not receive memory.'));
+    }
+  }
+
+  handleReadMemoryData(seq, data) {
+    if (this.promises[seq + 1000] === undefined) {
       return;
     }
 
-    const { resolve, reject } = this.promises[seq];
+    const { resolve, reject } = this.promises[seq + 1000];
 
     if (data === undefined) {
       reject(new Error('Did not receive data.'));
@@ -246,8 +268,8 @@ export class NtrClient {
 
   // Sending stuff
 
-  sendPacket(type, cmd, args = [], dataLen) {
-    const buf = new Buffer(84);
+  sendPacket(type, cmd, args = [], dataLen, dump) {
+    const buf = Buffer.alloc(84);
     buf.writeUInt32LE(0x12345678, 0);
     buf.writeUInt32LE(this.seqNumber, 4);
     buf.writeUInt32LE(type, 8);
@@ -255,7 +277,7 @@ export class NtrClient {
     for (let i = 0; i < Math.min(16, args.length); ++i) {
       buf.writeUInt32LE(args[i], 4 * (4 + i));
     }
-    buf.writeUInt32LE(dataLen, 20);
+    buf.writeUInt32LE(dataLen, 80);
     this.sock.write(buf);
 
     this.seqNumber += 1000;
@@ -275,6 +297,10 @@ export class NtrClient {
 
   hello() {
     this.sendPacket(0, 3, undefined, 0);
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'hello' };
+    });
   }
 
   heartbeat() {
@@ -292,6 +318,7 @@ export class NtrClient {
   readMemory(addr, size, pid) {
     this.sendPacket(0, 9, [pid, addr, size], 0);
     const seq = this.seqNumber;
+    console.log('sent readmemory at seq ' + seq);
     return new Promise((resolve, reject) => {
       this.promises[seq] = { resolve, reject, type: 'memory' };
     });
