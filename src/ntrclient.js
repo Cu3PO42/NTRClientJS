@@ -98,13 +98,6 @@ export class NtrClient {
     if (this.promises[seq] !== undefined) {
       delete this.promises[seq];
     }
-
-    if (data !== undefined) {
-      console.log(`Received cmd ${cmd} at seq ${seq} with data:`);
-      console.log(data.toString());
-    } else {
-      //console.log(`Received cmd ${cmd} at seq ${seq} without data`);
-    }
   }
 
   handleProcesses(seq, lines) {
@@ -353,9 +346,18 @@ export class NtrClient {
 }
 
 export default function connectNTR(ip, disconnectedCallback) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    let connected = false;
     const client = new NtrClient(ip, () => {
+      connected = true;
       resolve(client);
-    }, disconnectedCallback);
+    }, (...args) => {
+      if (!connected) {
+        reject(new Error('Connection could not be established.'));
+      }
+      if (typeof disconnectedCallback === 'function') {
+        disconnectedCallback(...args);
+      }
+    });
   });
 }
