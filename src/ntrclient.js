@@ -90,14 +90,6 @@ export class NtrClient {
             break;
         }
         break;
-
-        if (lines[0] === 'valid memregions' && lines[lines.length - 1]) {
-          this.handleMemlayout(seq, lines);
-        } else if (lines[0].startsWith('tid: ')) {
-          this.handleThreads(seq, lines);
-        } else if (lines[lines.length - 1] === 'done') {
-
-        }
     }
 
     if (this.promises[seq] !== undefined) {
@@ -214,6 +206,25 @@ export class NtrClient {
       }));
     } catch(e) {
       reject(new Error('Response does not match expected format for memlayout.'));
+    }
+  }
+
+  handleHandles(seq, lines) {
+    const { resolve, reject } = this.promises[seq];
+    try {
+      if (lines[lines.length - 1] !== 'done') {
+        throw null;
+      }
+
+      const handles = lines.slice(0, -1);
+      resolve(handles.map(handle => {
+        const m = region.match(/^h: ([\da-f]{8}), p: ([\da-f]{8})$/);
+        const h = parseInt(m[1], 16);
+        const p = parseInt(m[2], 16);
+        return { h, p };
+      }));
+    } catch(e) {
+      reject(new Error('Response does not match expected format for handles.'));
     }
   }
 
