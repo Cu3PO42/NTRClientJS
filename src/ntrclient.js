@@ -89,17 +89,19 @@ export class NtrClient {
             this.promises[seq].reject(new Error('Unexpected message type.'));
             break;
         }
-      break;
+        break;
 
         if (lines[0] === 'valid memregions' && lines[lines.length - 1]) {
           this.handleMemlayout(seq, lines);
-        } else if (lines[lines.length - 1] === 'end of process list.') {
-          this.handleProcesses(seq, lines);
         } else if (lines[0].startsWith('tid: ')) {
           this.handleThreads(seq, lines);
         } else if (lines[lines.length - 1] === 'done') {
 
         }
+    }
+
+    if (this.promises[seq] !== undefined) {
+      delete this.promises[seq];
     }
 
     if (data !== undefined) {
@@ -135,6 +137,62 @@ export class NtrClient {
       }));
     } catch(e) {
       reject(e);
+    }
+  }
+
+  handleThreads(seq, lines) {
+    const { resolve, reject } = this.promises[seq];
+    const res = {
+      threads: [],
+      recommendedPc: [],
+      recommendedLr: []
+    };
+
+    try {
+      let i;
+      for (i = 0; lines[i].startsWith('tid: '); i += 3) {
+        const tid = parseInt(lines[i].match(/^tid: 0x([\da-f]{8})$/)[1], 16);
+        const m = lines[i + 1].match(/^pc: ([\da-f]{8}), lr: ([\da-f]{8})$/);
+        if (Number.isNaN(tid)) {
+          throw null;
+        }
+        const pc = parseInt(m[1], 16);
+        const lr = parseInt(m[2], 16);
+        const data = lines[i + 1].split(' ');
+        const dataBuf = Buffer.alloc(128);
+        for (let j = 0; j < 32; ++j) {
+          const val = parseInt(data[j], 16);
+          if (Number.isNaN(val)) {
+            throw null;
+          }
+          dataBuf.writeUInt32LE(val, j * 4);
+        }
+        res.threads.push({ tid, pc, lr, data: dataBuf });
+      }
+
+      if (lines[i++] !== 'recommended pc:') {
+        throw null;
+      }
+
+      for (; /^[\da-f]{8}$/.test(lines[i]); ++i) {
+        res.recommendedPc.push(parseInt(lines[i], 16));
+      }
+
+      if (lines[i++] !== 'recommended lr:') {
+        throw null;
+      }
+
+      for (; /^[\da-f]{8}$/.test(lines[i]); ++i) {
+        res.recommendedLr.push(parseInt(lines[i], 16));
+      }
+
+      if (i < lines.length) {
+        throw null;
+      }
+
+      resolve(res);
+    } catch(e) {
+      reject(new Error('Response does not match expected format for thread list.'));
     }
   }
 
