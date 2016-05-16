@@ -62,8 +62,6 @@ export class NtrClient {
 
       this.handleData();
     } catch(e) {
-      console.log('error in handleData: ');
-      console.log(e);
       this.disconnect();
     }
   }
@@ -76,7 +74,16 @@ export class NtrClient {
           break;
         }
         const { type } = this.promises[seq];
-        const lines = data !== undefined ? data.toString().match(/^.+$/gm) : [];
+        let lines;
+        if (data === undefined) {
+          lines = [];
+        } else {
+          let string = data.toString();
+          if (string.startsWith('rtRecvSocket failed: 00000000')) {
+            string = string.slice(29);
+          }
+          lines = string.match(/^.+$/gm);
+        }
         switch(type) {
           case 'processes':
             this.handleProcesses(seq, lines);
@@ -124,6 +131,7 @@ export class NtrClient {
         const m = proc.match(/^pid: 0x([\da-f]{8}), pname: *([^,]+), tid: ([\da-f]{16}), kpobj: ([\da-f]{8})$/);
 
         if (m === null) {
+          console.log(proc);
           throw new Error('Response does not match expected format for process list.');
         }
 
@@ -318,7 +326,6 @@ export class NtrClient {
   readMemory(addr, size, pid) {
     this.sendPacket(0, 9, [pid, addr, size], 0);
     const seq = this.seqNumber;
-    console.log('sent readmemory at seq ' + seq);
     return new Promise((resolve, reject) => {
       this.promises[seq] = { resolve, reject, type: 'memory' };
     });
