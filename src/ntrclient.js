@@ -90,6 +90,9 @@ export class NtrClient {
             break;
         }
         break;
+      case 9:
+        this.handleReadMemory(seq, data);
+        break;
     }
 
     if (this.promises[seq] !== undefined) {
@@ -226,6 +229,17 @@ export class NtrClient {
     } catch(e) {
       reject(new Error('Response does not match expected format for handles.'));
     }
+  }
+
+  handleReadMemory(seq, data) {
+    const { resolve, reject } = this.promises[seq];
+
+    if (data === undefined) {
+      reject(new Error('Did not receive data.'));
+      return;
+    }
+
+    resolve(data);
   }
 
   // Sending stuff
