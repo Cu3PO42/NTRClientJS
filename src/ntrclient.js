@@ -5,7 +5,7 @@ import Promise from 'bluebird';
 PullStream.prototype.pullAsync = Promise.promisify(PullStream.prototype.pull);
 
 export class NtrClient {
-  seqNumber = 0;
+  seqNumber = 1000;
   canSendHeartbeat = true;
   promises = {};
 
@@ -69,22 +69,78 @@ export class NtrClient {
   handlePacket(cmd, seq, data) {
     switch (cmd) {
       case 0:
-        this.canSendHeartbeat = 1;
+        this.canSendHeartbeat = true;
+        const lines = data.toString().match(/^.+$/gm);
+        const { type } = this.promises[seq];
+        switch(type) {
+          case 'processes':
+            this.handleProcesses(seq, lines);
+            break;
+          case 'threads':
+            this.handleThreads(seq, lines);
+            break;
+          case 'memlayout':
+            this.handleMemlayout(seq, lines);
+            break;
+          case 'handle':
+            this.handleHandles(seq, lines);
+            break;
+          default:
+            this.promises[seq].reject(new Error('Unexpected message type.'));
+            break;
+        }
+      break;
+
+        if (lines[0] === 'valid memregions' && lines[lines.length - 1]) {
+          this.handleMemlayout(seq, lines);
+        } else if (lines[lines.length - 1] === 'end of process list.') {
+          this.handleProcesses(seq, lines);
+        } else if (lines[0].startsWith('tid: ')) {
+          this.handleThreads(seq, lines);
+        } else if (lines[lines.length - 1] === 'done') {
+
+        }
     }
 
     if (data !== undefined) {
-      console.log(`Received cmd ${cmd} with data:`);
+      console.log(`Received cmd ${cmd} at seq ${seq} with data:`);
       console.log(data.toString());
     } else {
-      console.log(`Received cmd ${cmd} without data`);
+      //console.log(`Received cmd ${cmd} at seq ${seq} without data`);
+    }
+  }
+
+  handleProcesses(seq, lines) {
+    const { resolve, reject } = this.promises[seq];
+    if (lines[lines.length - 1] !== 'end of process list.') {
+      reject(new Error('Unexpected reply for process list.'));
+      return;
+    }
+
+    const processes = lines.slice(0, -1);
+    try {
+      resolve(processes.map(proc => {
+        const m = proc.match(/^pid: 0x([\da-f]{8}), pname: *(\w+), tid: ([\da-f]{16}), kpobj: ([\da-f]{8})$/);
+
+        if (m === null) {
+          throw new Error('Response does not match expected format for process list.');
+        }
+
+        return {
+          pid: parseInt(m[1], 16),
+          name: m[2],
+          tid: parseInt(m[3], 16)
+          kpobj: parseInt(m[4], 16)
+        };
+      }));
+    } catch(e) {
+      reject(e);
     }
   }
 
   // Sending stuff
 
   sendPacket(type, cmd, args = [], dataLen) {
-    this.seqNumber += 1000;
-
     const buf = new Buffer(84);
     buf.writeUInt32LE(0x12345678, 0);
     buf.writeUInt32LE(this.seqNumber, 4);
@@ -95,6 +151,8 @@ export class NtrClient {
     }
     buf.writeUInt32LE(dataLen, 20);
     this.sock.write(buf);
+
+    this.seqNumber += 1000;
   }
 
   saveFile(name, data) {
@@ -117,8 +175,6 @@ export class NtrClient {
     if (this.canSendHeartbeat) {
       this.canSendHeartbeat = false;
       this.sendPacket(0, 0, undefined, 0);
-
-      // TODO return
     }
   }
 
@@ -129,7 +185,10 @@ export class NtrClient {
 
   readMemory(addr, size, pid) {
     this.sendPacket(0, 9, [pid, addr, size], 0);
-    // TODO figure out return handling here
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'memory' };
+    });
   }
 
   addBreakpoint(addr, type) {
@@ -154,12 +213,18 @@ export class NtrClient {
 
   listProcesses() {
     this.sendPacket(0, 5, undefined, 0);
-    // TODO figure out return
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'processes' };
+    });
   }
 
   listThreads(pid) {
     this.sendPacket(0, 7, [pid], 0);
-    // TODO return
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'threads' };
+    });
   }
 
   attachToProcess(pid, patchAddr = 0) {
@@ -168,12 +233,18 @@ export class NtrClient {
 
   queryHandle(pid) {
     this.sendPacket(0, 12, [pid], 0);
-    // TODO return
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'handle' };
+    });
   }
 
   getMemlayout(pid) {
     this.sendPacket(0, 8, [pid], 0);
-    // TODO return
+    const seq = this.seqNumber;
+    return new Promise((resolve, reject) => {
+      this.promises[seq] = { resolve, reject, type: 'memlayout' };
+    });
   }
 }
 
