@@ -13,10 +13,14 @@ export class NtrClient {
     this.sock = connect(8000, ip, () => {
       this.sock.setNoDelay(true);
       this.sock.setKeepAlive(true);
+
+      this.heartbeatId = setInterval(this.heartbeat.bind(this), 1000);
+
       if (typeof connectedCallback === 'function') {
         connectedCallback();
       }
     });
+
     if (typeof disconnectedCallback === 'function') {
       this.sock.on('close', disconnectedCallback);
     }
@@ -28,37 +32,46 @@ export class NtrClient {
   }
 
   disconnect() {
+    clearInterval(this.heartbeatId);
     this.sock.end();
   }
 
   // Receiving stuff
 
   async handleData() {
-    const cmdBuf = await this.stream.pullAsync(84);
+    try {
+      const cmdBuf = await this.stream.pullAsync(84);
 
-    const magic = cmdBuf.readUInt32LE(0);
-    const seq = cmdBuf.readUInt32LE(4);
-    const type = cmdBuf.readUInt32LE(8);
-    const cmd = cmdBuf.readUInt32LE(12);
-    const args = new Uint32Array(cmdBuf.buffer, cmdBuf.byteOffset + 16, 16);
-    const dataLen = cmdBuf.readUInt32LE(80);
+      const magic = cmdBuf.readUInt32LE(0);
+      const seq = cmdBuf.readUInt32LE(4);
+      const type = cmdBuf.readUInt32LE(8);
+      const cmd = cmdBuf.readUInt32LE(12);
+      const args = new Uint32Array(cmdBuf.buffer, cmdBuf.byteOffset + 16, 16);
+      const dataLen = cmdBuf.readUInt32LE(80);
 
-    if (magic != 0x12345678) {
-      return;
+      if (magic != 0x12345678) {
+        return;
+      }
+
+      if (dataLen !== 0) {
+        const data = await this.stream.pullAsync(dataLen);
+        this.handlePacket(cmd, seq, data);
+      } else {
+        this.handlePacket(cmd, seq, undefined);
+      }
+
+      this.handleData();
+    } catch(e) {
+      this.disconnect();
     }
-
-    if (dataLen !== 0) {
-      const data = await this.stream.pullAsync(dataLen);
-      this.handlePacket(cmd, seq, data);
-    } else {
-      this.handlePacket(cmd, seq, undefined);
-    }
-
-    this.canSendHeartbeat = 1; // TODO only do this as response to heartbeats
-    this.handleData();
   }
 
   handlePacket(cmd, seq, data) {
+    switch (cmd) {
+      case 0:
+        this.canSendHeartbeat = 1;
+    }
+
     if (data !== undefined) {
       console.log(`Received cmd ${cmd} with data:`);
       console.log(data.toString());
