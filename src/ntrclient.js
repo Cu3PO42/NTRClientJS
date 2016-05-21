@@ -4,7 +4,7 @@ import Promise from 'bluebird';
 
 PullStream.prototype.pullAsync = Promise.promisify(PullStream.prototype.pull);
 
-export class NtrClient {
+export default class NtrClient {
   seqNumber = 1000;
   canSendHeartbeat = true;
   promises = {};
@@ -34,6 +34,23 @@ export class NtrClient {
   disconnect() {
     clearInterval(this.heartbeatId);
     this.sock.end();
+  }
+
+  static connectNTR(ip, disconnectedCallback) {
+    return new Promise((resolve, reject) => {
+      let connected = false;
+      const client = new NtrClient(ip, () => {
+        connected = true;
+        resolve(client);
+      }, (...args) => {
+        if (!connected) {
+          reject(new Error('Connection could not be established.'));
+        }
+        if (typeof disconnectedCallback === 'function') {
+          disconnectedCallback(...args);
+        }
+      });
+    });
   }
 
   // Receiving stuff
@@ -382,21 +399,4 @@ export class NtrClient {
       this.promises[seq] = { resolve, reject, type: 'memlayout' };
     });
   }
-}
-
-export default function connectNTR(ip, disconnectedCallback) {
-  return new Promise((resolve, reject) => {
-    let connected = false;
-    const client = new NtrClient(ip, () => {
-      connected = true;
-      resolve(client);
-    }, (...args) => {
-      if (!connected) {
-        reject(new Error('Connection could not be established.'));
-      }
-      if (typeof disconnectedCallback === 'function') {
-        disconnectedCallback(...args);
-      }
-    });
-  });
 }
