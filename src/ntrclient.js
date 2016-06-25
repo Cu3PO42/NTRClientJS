@@ -24,6 +24,7 @@ export default class NtrClient {
     if (typeof disconnectedCallback === 'function') {
       this.sock.on('close', disconnectedCallback);
     }
+    this.sock.on('end', () => {});
 
     this.stream = new PullStream();
     this.sock.pipe(this.stream);
