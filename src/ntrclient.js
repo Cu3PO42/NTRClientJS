@@ -400,4 +400,15 @@ export default class NtrClient {
       this.promises[seq] = { resolve, reject, type: 'memlayout' };
     });
   }
+  /*
+   priorityMode (Defaults to 0): Controls which screen has the priority to be transferred. 0 for the top screen, and 1 for the bottom screen.
+   priorityFactor (Defaults to 5): Controls the priority promoted screen's frame-rate factor. When it is set to 1, the top screen have same frame-rate with bottom. When set to 0, only the screen set by priorityMode will be displayed.
+   quality (Defaults to 90): Controls the JPEG compression quality (Ranged from 1 to 100; from 1 being lowest quality to 100 for highest quality).
+   qosValue (Defaults to 20.0): Limits the bandwidth to work on different wireless environments, the actual bandwidth cost could be lower than this value. Set to 25, 30 or higher on good wireless environment, set to 15 if the WiFi quality is not so good. Set qosValue higher than 100 will disable the QoS feature.
+   */
+  remoteplay(priorityMode = 0, priorityFactor = 5, quality = 90, qosValue = 15.0) {
+        let num1 = (qosValue * 1024 * 1024 / 8);
+        let argsarry = [(priorityMode << 8 | priorityFactor),quality,num1];
+        this.sendPacket(0,901,argsarry,0);
+    }
 }
