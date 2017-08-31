@@ -1,0 +1,16 @@
+language: node_js
+node_js:
+- '8'
+sudo: false
+script:
+- npm run build
+- npm run generate-documentation
+notifications:
+  email: false
+deploy:
+  - provider: pages
+    skip_cleanup: true
+    on:
+      branch: master
+    local_dir: ./doc
+    github_token: $GITHUB_TOKEN
