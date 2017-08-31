@@ -1,8 +1,18 @@
 import { connect } from 'net';
 import PullStream from 'pullstream';
-import Promise from 'bluebird';
 
-PullStream.prototype.pullAsync = Promise.promisify(PullStream.prototype.pull);
+function promisify(fn) {
+  return function(...args) {
+    return new Promise(function(resolve, reject) {
+      fn(...args, function(err, res) {
+        if (err) reject(err);
+        else resolve(res);
+      });
+    });
+  }
+}
+
+PullStream.prototype.pullAsync = promisify(PullStream.prototype.pull);
 
 export default class NtrClient {
   seqNumber = 1000;

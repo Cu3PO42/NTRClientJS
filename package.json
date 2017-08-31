@@ -9,7 +9,6 @@
   "author": "Cu3PO42",
   "license": "MIT",
   "dependencies": {
-    "bluebird": "^3.3.5",
     "pullstream": "^1.0.0"
   },
   "devDependencies": {
