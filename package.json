@@ -6,11 +6,12 @@
   "repository": "https://github.com/Cu3PO42/NTRClientJS.git",
   "bugs": "https://github.com/Cu3PO42/NTRClientJS/issues",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc && tsc --declaration"
   },
   "author": "Cu3PO42",
   "license": "MIT",
   "dependencies": {
+    "@types/node": "^8.0.26",
     "pullstream": "^1.0.0"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { connect } from 'net';
+import { connect, Socket } from 'net';
 import PullStream from 'pullstream';
 
 function promisify(fn) {
@@ -14,10 +14,20 @@ function promisify(fn) {
 
 PullStream.prototype.pullAsync = promisify(PullStream.prototype.pull);
 
+/**
+ * This class represents a connection to a 3DS system running the NTR debugger.
+ * 
+ * It provides methods to execute all supported operations and will keep the connection alive by handdling heartbeats.
+ */
 export default class NtrClient {
-  seqNumber = 1000;
-  canSendHeartbeat = true;
-  promises = {};
+  private seqNumber = 1000;
+  private canSendHeartbeat = true;
+  private promises: { [id: number]: { resolve(arg?: any), reject(err: Error), type: string } } = {};
+  private sock: Socket;
+  private heartbeatId: number;
+  private connectedCallback: () => void;
+  private disconnectedCallback: (error: boolean) => void;
+  private stream: PullStream;
 
   constructor(ip, connectedCallback, disconnectedCallback) {
     this.sock = connect(8000, ip, () => {
@@ -300,7 +310,7 @@ export default class NtrClient {
 
   // Sending stuff
 
-  sendPacket(type, cmd, args = [], dataLen, dump) {
+  sendPacket(type, cmd, args = [], dataLen) {
     const buf = Buffer.alloc(84);
     buf.writeUInt32LE(0x12345678, 0);
     buf.writeUInt32LE(this.seqNumber, 4);
@@ -347,7 +357,7 @@ export default class NtrClient {
     this.sock.write(buf);
   }
 
-  readMemory(addr, size, pid) {
+  readMemory(addr, size, pid): Promise<Buffer> {
     this.sendPacket(0, 9, [pid, addr, size], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -403,7 +413,7 @@ export default class NtrClient {
     });
   }
 
-  getMemlayout(pid) {
+  getMemlayout(pid): Promise<{ start: number, end: number, size: number }[]> {
     this.sendPacket(0, 8, [pid], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {

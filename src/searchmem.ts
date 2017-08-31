@@ -1,4 +1,6 @@
-export default async function search(client, pid, value, locations) {
+import NtrClient from './ntrclient';
+
+export default async function search(client: NtrClient, pid: number, value: number, locations?: number[]) {
   if (locations !== undefined) {
     const res = [];
 
