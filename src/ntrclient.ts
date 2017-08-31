@@ -15,21 +15,141 @@ function promisify(fn) {
 PullStream.prototype.pullAsync = promisify(PullStream.prototype.pull);
 
 /**
+ * A descriptor for a process on a device.
+ */
+export interface ProcessDescriptor {
+  /**
+   * Process ID.
+   */
+  pid: number;
+
+  /**
+   * Thread ID of (presumably) the main thread of the process.
+   */
+  tid: number;
+
+  /**
+   * Process name on the remote device.
+   */
+  name: string;
+
+  /**
+   * Unknown.
+   */
+  kpobj: number;
+}
+
+/**
+ * A descriptor for a thread running on a device.
+ */
+export interface ThreadDescriptor {
+  /**
+   * Thread ID.
+   */
+  tid: number;
+
+  /**
+   * Progam counter.
+   */
+  pc: number;
+
+  /**
+   * Link register. Contains the return address of a function.
+   */
+  lr: number;
+
+  /**
+   * Unknown.
+   */
+  data: Buffer;
+}
+
+export interface ThreadListResponse {
+  /**
+   * List of threads running in the process.
+   */
+  threads: ThreadDescriptor[];
+
+  /**
+   * Unknown.
+   */
+  recommendedPc: number[];
+
+  /**
+   * Unknown.
+   */
+  recommendedLr: number[];
+}
+
+export interface HandleDescriptor {
+  /**
+   * Unknown.
+   */
+  h: number;
+
+  /**
+   * Unknown.
+   */
+  p: number;
+}
+
+/**
  * This class represents a connection to a 3DS system running the NTR debugger.
  * 
  * It provides methods to execute all supported operations and will keep the connection alive by handdling heartbeats.
  */
 export default class NtrClient {
+
+  /**
+   * The next sequence number to be used for a package.
+   */
   private seqNumber = 1000;
+
+  /**
+   * Flag signifying whether we can send heartbeats at this time.
+   */
   private canSendHeartbeat = true;
+
+  /**
+   * A map of promises for actions that have yet to be resolved through an incoming reply and the expected type of
+   * reply.
+   */
   private promises: { [id: number]: { resolve(arg?: any), reject(err: Error), type: string } } = {};
+
+  /**
+   * The raw socket used for communication with the 3DS.
+   */
   private sock: Socket;
+
+  /**
+   * The cancellation id for the periodic heartbeat.
+   */
   private heartbeatId: number;
+
+  /**
+   * The callback to be called when a connection was established.
+   */
   private connectedCallback: () => void;
+
+  /**
+   * The callback to be called when the connection is closed.
+   */
   private disconnectedCallback: (error: boolean) => void;
+
+  /**
+   * The raw data stream from the server.
+   */
   private stream: PullStream;
 
-  constructor(ip, connectedCallback, disconnectedCallback) {
+  /**
+   * Create a new NtrClient. In most cases it is preferable to use [[connectNTR]].
+   * 
+   * @param ip The IPv4 address of the target device
+   * @param connectedCallback  Callback to call once the connection is established
+   * @param disconnectedCallback Callback to call when the connection is dropped. Takes a parameter indicating if it
+   *                             was due to an error
+   */
+  public constructor(ip: string, connectedCallback: () => void, disconnectedCallback: (error: boolean) => void) {
     this.sock = connect(8000, ip, () => {
       this.sock.setNoDelay(true);
       this.sock.setKeepAlive(true);
@@ -52,23 +172,34 @@ export default class NtrClient {
     this.handleData();
   }
 
-  disconnect() {
+  /**
+   * Disconnect from the device. Any pending actions will not be completed.
+   */
+  public disconnect() {
     clearInterval(this.heartbeatId);
     this.sock.end();
   }
 
-  static connectNTR(ip, disconnectedCallback) {
+  /**
+   * Create a new [[NtrClient]], wait for the connection to be established and return it as a Promise.
+   * 
+   * @param ip The IPv4 address of the target device
+   * @param disconnectedCallback Callback to call when the connection is dropped. Takes a parameter indicating if it
+   *                             was due to an error
+   * @return A Promise that resolves to the new [[NtrClient]] when the connection is established
+   */
+  public static connectNTR(ip: string, disconnectedCallback: (error: boolean) => void) {
     return new Promise((resolve, reject) => {
       let connected = false;
       const client = new NtrClient(ip, () => {
         connected = true;
         resolve(client);
-      }, (...args) => {
+      }, (err) => {
         if (!connected) {
           reject(new Error('Connection could not be established.'));
         }
         if (typeof disconnectedCallback === 'function') {
-          disconnectedCallback(...args);
+          disconnectedCallback(err);
         }
       });
     });
@@ -76,7 +207,10 @@ export default class NtrClient {
 
   // Receiving stuff
 
-  async handleData() {
+  /**
+   * Receive incoming data, verify it download the payload and dispatch it to [[handlePacket]].
+   */
+  private async handleData() {
     try {
       const cmdBuf = await this.stream.pullAsync(84);
 
@@ -109,7 +243,14 @@ export default class NtrClient {
     }
   }
 
-  handlePacket(cmd, seq, data) {
+  /**
+   * Handle a command response with optional payload by dispatching it to the correct handler.
+   * 
+   * @param cmd The id of the command response
+   * @param seq The sequence number of the response
+   * @param data The response payload
+   */
+  private handlePacket(cmd: number, seq: number, data?: Buffer) {
     switch (cmd) {
       case 0:
         this.canSendHeartbeat = true;
@@ -152,7 +293,13 @@ export default class NtrClient {
     }
   }
 
-  handleProcesses(seq, lines) {
+  /**
+   * Handle the response to a requested list of processes.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleProcesses(seq: number, lines: string[]) {
     const { resolve, reject } = this.promises[seq];
     if (lines[lines.length - 1] !== 'end of process list.') {
       reject(new Error('Unexpected reply for process list.'));
@@ -181,7 +328,13 @@ export default class NtrClient {
     }
   }
 
-  handleThreads(seq, lines) {
+  /**
+   * Handle the reply to a requested list of threads for a process.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleThreads(seq: number, lines: string[]) {
     const { resolve, reject } = this.promises[seq];
     const res = {
       threads: [],
@@ -237,7 +390,13 @@ export default class NtrClient {
     }
   }
 
-  handleMemlayout(seq, lines) {
+  /**
+   * Handle the reply to a requested list of mapped memory areas of a process.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleMemlayout(seq: number, lines: string[]) {
     const { resolve, reject } = this.promises[seq];
     try {
       if (lines[0] !== 'valid memregions:' || lines[lines.length - 1] !== 'end of memlayout.') {
@@ -258,7 +417,13 @@ export default class NtrClient {
     }
   }
 
-  handleHandles(seq, lines) {
+  /**
+   * Handle the reply to a requested list of handles owned by a process.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleHandles(seq: number, lines: string[]) {
     const { resolve, reject } = this.promises[seq];
     try {
       if (lines[lines.length - 1] !== 'done') {
@@ -277,7 +442,13 @@ export default class NtrClient {
     }
   }
 
-  handleHello(seq, lines) {
+  /**
+   * Handle the reply to a hello command.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleHello(seq: number, lines: string[]) {
     const { resolve, reject } = this.promises[seq];
 
     if (lines.length === 1 && lines[0] === 'hello') {
@@ -287,13 +458,25 @@ export default class NtrClient {
     }
   }
 
-  handleReadMemoryText(seq, lines) {
+  /**
+   * Handle the end of a 'read memory' reply.
+   * 
+   * @param seq The sequence number of the reply
+   * @param lines The lines sent as a reply
+   */
+  private handleReadMemoryText(seq: number, lines: string[]) {
     if (lines.length !== 1 || lines[0] !== 'finished') {
       this.promises[seq].reject(new Error('Did not receive memory.'));
     }
   }
 
-  handleReadMemoryData(seq, data) {
+  /**
+   * Handle the data sent as a reply to a 'read memory' command.
+   * 
+   * @param seq The sequence number of the reply
+   * @param data The raw data received
+   */
+  private handleReadMemoryData(seq: number, data: Buffer) {
     if (this.promises[seq + 1000] === undefined) {
       return;
     }
@@ -310,7 +493,15 @@ export default class NtrClient {
 
   // Sending stuff
 
-  sendPacket(type, cmd, args = [], dataLen) {
+  /**
+   * Send a packet with the given paramaters to NTR.
+   * 
+   * @param type The type of the command
+   * @param cmd The command ID
+   * @param args Up to 16 arguments of type uint32
+   * @param dataLen Length of the payload that will be sent
+   */
+  private sendPacket(type: number, cmd: number, args: number[] = [], dataLen: number) {
     const buf = Buffer.alloc(84);
     buf.writeUInt32LE(0x12345678, 0);
     buf.writeUInt32LE(this.seqNumber, 4);
@@ -325,19 +516,31 @@ export default class NtrClient {
     this.seqNumber += 1000;
   }
 
-  saveFile(name, data) {
+  /**
+   * Save a file to the connected device under the given path.
+   * 
+   * @param name The path of the target file
+   * @param data The data to be saved
+   */
+  public saveFile(name: string, data: Buffer) {
     const nameBuffer = Buffer.alloc(200);
     nameBuffer.write(name);
-    this.sendPacket(1,1, undefined, 200 + data.byetLength);
+    this.sendPacket(1,1, undefined, 200 + data.byteLength);
     this.sock.write(nameBuffer);
     this.sock.write(data);
   }
 
-  reload() {
+  /**
+   * TODO: Figure out usage and document.
+   */
+  public reload() {
     this.sendPacket(0, 4, undefined, 0);
   }
 
-  hello() {
+  /**
+   * Send a hello packet - roughly equivalent to a ping.
+   */
+  public hello(): Promise<void> {
     this.sendPacket(0, 3, undefined, 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -345,19 +548,36 @@ export default class NtrClient {
     });
   }
 
-  heartbeat() {
+  /**
+   * Send a heartbeat packet to the device.
+   */
+  private heartbeat() {
     if (this.canSendHeartbeat) {
       this.canSendHeartbeat = false;
       this.sendPacket(0, 0, undefined, 0);
     }
   }
 
-  writeMemory(addr, pid, buf) {
+  /**
+   * Write an area of memory to an address in the memory space of a process.
+   * 
+   * @param addr The address to write to
+   * @param pid PID
+   * @param buf The data to be written
+   */
+  public writeMemory(addr: number, pid: number, buf: Buffer) {
     this.sendPacket(1, 10, [pid, addr, buf.byteLength], buf.byteLength);
     this.sock.write(buf);
   }
 
-  readMemory(addr, size, pid): Promise<Buffer> {
+  /**
+   * Read memory from an address in the memory space of a process.
+   * 
+   * @param addr The address to read from
+   * @param size The size of the memory region to read
+   * @param pid PID
+   */
+  public readMemory(addr: number, size: number, pid: number): Promise<Buffer> {
     this.sendPacket(0, 9, [pid, addr, size], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -365,7 +585,14 @@ export default class NtrClient {
     });
   }
 
-  addBreakpoint(addr, type) {
+  /**
+   * Add a breakpoint at an address in the attacked process that triggers either once or always.
+   * This function is untested.
+   * 
+   * @param addr Address of the instruction to break at
+   * @param type Whether to break once or always
+   */
+  public addBreakpoint(addr: number, type: 'always' | 'once') {
     if (type === 'always') {
       this.sendPacket(0, 11, [1, addr, 1], 0);
     } else if (type === 'once') {
@@ -373,19 +600,40 @@ export default class NtrClient {
     }
   }
 
-  disBreakpoint(id) { // TODO what does this do?
+  /**
+   * Probably disable a breakpoint with the given ID.
+   * This function is untested.
+   * 
+   * @param id ID of the breakpoit to disable
+   */
+  public disableBreakpoint(id) {
     this.sendPacket(0, 11, [id, 0, 3], 0);
   }
 
-  enaBreakpoint(id) { // TODO what does this do?
+  /**
+   * Probably enable a breakpoint with the given ID.
+   * This function is untested.
+   * 
+   * @param id ID of the breakpoit to enable
+   */
+  public enableBreakpoint(id) {
     this.sendPacket(0, 11, [id, 0, 2], 0);
   }
 
-  resume() {
+  /**
+   * Probably resume the execution of the attacked stopped at a breakpoint.
+   * This function is untested.
+   */
+  public resume() {
     this.sendPacket(0, 11, [0, 0, 4], 0);
   }
 
-  listProcesses() {
+  /**
+   * Get a list of all processes running on the target device.
+   * 
+   * @return A Promise for a list of all running processe
+   */
+  public listProcesses(): Promise<ProcessDescriptor[]> {
     this.sendPacket(0, 5, undefined, 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -393,7 +641,13 @@ export default class NtrClient {
     });
   }
 
-  listThreads(pid) {
+  /**
+   * Get a list of all threads that are part of a given process.
+   * 
+   * @param pid The process ID for which to retrieve the threads
+   * @return A promise for the threads
+   */
+  public listThreads(pid): Promise<ThreadListResponse> {
     this.sendPacket(0, 7, [pid], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -401,11 +655,23 @@ export default class NtrClient {
     });
   }
 
-  attachToProcess(pid, patchAddr = 0) {
+  /**
+   * Attach the debugger to a given process.
+   * 
+   * @param pid Process to attach to
+   * @param patchAddr Unknown
+   */
+  public attachToProcess(pid, patchAddr = 0) {
     this.sendPacket(0, 6, [pid, patchAddr], 0);
   }
 
-  queryHandle(pid) {
+  /**
+   * Request the handles owned by a given process.
+   * 
+   * @param pid The process from which to retrieve the handles.
+   * @return A promis for the list of handles
+   */
+  public queryHandle(pid): Promise<HandleDescriptor[]> {
     this.sendPacket(0, 12, [pid], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
@@ -413,22 +679,35 @@ export default class NtrClient {
     });
   }
 
-  getMemlayout(pid): Promise<{ start: number, end: number, size: number }[]> {
+  /**
+   * Get the memory regions mapped by a given process.
+   * 
+   * @param pid The process for which to retrieve the memory regions
+   * @return A promise for the memory regions
+   */
+  public getMemlayout(pid): Promise<{ start: number, end: number, size: number }[]> {
     this.sendPacket(0, 8, [pid], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {
       this.promises[seq] = { resolve, reject, type: 'memlayout' };
     });
   }
-  /*
-   priorityMode (Defaults to 0): Controls which screen has the priority to be transferred. 0 for the top screen, and 1 for the bottom screen.
-   priorityFactor (Defaults to 5): Controls the priority promoted screen's frame-rate factor. When it is set to 1, the top screen have same frame-rate with bottom. When set to 0, only the screen set by priorityMode will be displayed.
-   quality (Defaults to 90): Controls the JPEG compression quality (Ranged from 1 to 100; from 1 being lowest quality to 100 for highest quality).
-   qosValue (Defaults to 20.0): Limits the bandwidth to work on different wireless environments, the actual bandwidth cost could be lower than this value. Set to 25, 30 or higher on good wireless environment, set to 15 if the WiFi quality is not so good. Set qosValue higher than 100 will disable the QoS feature.
+
+  /**
+   * Start the remote play, i.e. streaming of the screens to a supported program.
+   * 
+   * @param priorityMode Controls which screen has the priority to be transferred.
+   *                     0 for the top screen, and 1 for the bottom screen
+   * @param priorityFactor Controls the priority promoted screen's frame-rate factor.
+   *                       When it is set to 1, the top screen have same frame-rate with bottom.
+   *                       When set to 0, only the screen set by priorityMode will be displayed.
+   * @param quality Controls the JPEG compression quality. Ranged from 1 to 100; from 1 being lowest, 100 being highest
+   * @param qosValue Limits the bandwidth to work on different wireless environments, the actual bandwidth cost could
+   *                 be lower than this value. Set to 25, 30 or higher on good wireless environment, set to 15 if the
+   *                  WiFi quality is not so good. Setting qosValue higher than 100 will disable the QoS feature.
    */
-  remoteplay(priorityMode = 0, priorityFactor = 5, quality = 90, qosValue = 15.0) {
-        let num1 = (qosValue * 1024 * 1024 / 8);
-        let argsarry = [(priorityMode << 8 | priorityFactor),quality,num1];
-        this.sendPacket(0,901,argsarry,0);
-    }
+  public remoteplay(priorityMode: 0 | 1 = 0, priorityFactor = 5, quality = 90, qosValue = 15.0) {
+    const num = (qosValue * 1024 * 1024 / 8);
+    this.sendPacket(0, 901, [(priorityMode << 8 | priorityFactor), quality], 0);
+  }
 }
