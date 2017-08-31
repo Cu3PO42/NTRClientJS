@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "A library to talk to the NTR debugger on the 3DS.",
   "main": "lib/ntrclient.js",
+  "repository": "https://github.com/Cu3PO42/NTRClientJS.git",
+  "bugs": "https://github.com/Cu3PO42/NTRClientJS/issues",
   "scripts": {
     "compile": "babel ./src --out-dir ./lib"
   },
