@@ -6,7 +6,8 @@
   "repository": "https://github.com/Cu3PO42/NTRClientJS.git",
   "bugs": "https://github.com/Cu3PO42/NTRClientJS/issues",
   "scripts": {
-    "build": "tsc && tsc --declaration"
+    "build": "tsc && tsc --declaration",
+    "generate-documentation": "typedoc --mode modules --tsconfig tsconfig.json --excludeExternals --theme minimal --name NTRClient --out doc"
   },
   "author": "Cu3PO42",
   "license": "MIT",
@@ -15,6 +16,7 @@
     "pullstream": "^1.0.0"
   },
   "devDependencies": {
+    "typedoc": "^0.8.0",
     "typescript": "^2.4.2"
   }
 }
