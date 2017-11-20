@@ -1,5 +1,5 @@
 import { connect, Socket } from 'net';
-import PullStream from 'pullstream';
+import * as PullStream from 'pullstream';
 
 function promisify(fn) {
   return function(...args) {
