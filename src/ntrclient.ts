@@ -3,8 +3,9 @@ import * as PullStream from 'pullstream';
 
 function promisify(fn) {
   return function(...args) {
+    const that = this;
     return new Promise(function(resolve, reject) {
-      fn(...args, function(err, res) {
+      fn.call(that, ...args, function(err, res) {
         if (err) reject(err);
         else resolve(res);
       });
