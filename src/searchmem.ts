@@ -14,8 +14,9 @@ export default async function search(client: NtrClient, pid: number, value: numb
     const res: number[] = [];
 
     for (const loc of locations) {
-      const val = await client.readMemory(loc, 4, pid);
-      if (val.readUInt32LE(0) === value) {
+      const data = await client.readMemory(loc, 4, pid);
+      const val = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      if (val.getUint32(0, true) === value) {
         res.push(loc);
       }
     }
@@ -27,9 +28,10 @@ export default async function search(client: NtrClient, pid: number, value: numb
   const res: number[] = [];
   for (const region of memorymap) {
     console.log(`Scanning region from ${region.start.toString(16)} to ${region.end.toString(16)}`);
-    const mem = await client.readMemory(region.start, region.size, pid);
-    for (let i = 0; i < mem.length; i += 4) {
-      if (mem.readUInt32LE(i) === value) {
+    const memArr = await client.readMemory(region.start, region.size, pid);
+    const mem = new DataView(memArr.buffer, memArr.byteOffset, memArr.byteLength);
+    for (let i = 0; i < mem.byteLength; i += 4) {
+      if (mem.getUint32(i, true) === value) {
         res.push(region.start + i);
       }
     }

@@ -1,20 +1,5 @@
 import { connect, Socket } from 'net';
-import * as PullStream from 'pullstream';
 import { write } from 'fs';
-
-function promisify(fn) {
-  return function(...args) {
-    const that = this;
-    return new Promise(function(resolve, reject) {
-      fn.call(that, ...args, function(err, res) {
-        if (err) reject(err);
-        else resolve(res);
-      });
-    });
-  }
-}
-
-PullStream.prototype.pullAsync = promisify(PullStream.prototype.pull);
 
 /**
  * A constructor for a generic socket.
@@ -28,7 +13,7 @@ interface SocketConstructor {
    * @param connectedCallback Call this function upon successfull connection to the socket
    * @param disconnectedCallback Call this function when the socket is disconnected
    */
-  new (ip: string, port: number, connectedCallback: () => void, disconnectedCallback?: () => void): SocketBase;
+  new (ip: string, port: number, connectedCallback: () => void, disconnectedCallback?: (error: boolean) => void): SocketBase;
 }
 
 /**
@@ -62,13 +47,13 @@ abstract class SocketBase {
   /**
    * Data that has already been received but not yet read.
    */
-  private currentBuffer: Uint8Array;
+  private currentBuffer: Uint8Array = new Uint8Array(0);
 
   /**
    * Promises from calls to read that have not been resolved because not enough data has been received.
    * They are stored in the order that they will be received.
    */
-  private nextPromises: StoredPullPromise[]
+  private nextPromises: StoredPullPromise[] = [];
 
   /**
    * Flag indicating whether the socket has been disconnected already.
@@ -156,7 +141,7 @@ abstract class SocketBase {
 class NativeSocket extends SocketBase {
   private sock: Socket;
 
-  constructor(ip: string, port: number, connectedCallback: () => void, private disconnectedCallback?: () => void) {
+  constructor(ip: string, port: number, connectedCallback: () => void, private disconnectedCallback?: (error: boolean) => void) {
     super();
     this.sock = connect(port, ip, () => {
       this.sock.setNoDelay(true);
@@ -169,8 +154,8 @@ class NativeSocket extends SocketBase {
     this.sock.on('data', data => {
       this.receiveData(new Uint8Array(data.buffer, data.byteOffset, data.length));
     });
-    this.sock.on('close', () => {
-      if (this.disconnectedCallback) this.disconnectedCallback();
+    this.sock.on('close', (err) => {
+      if (this.disconnectedCallback) this.disconnectedCallback(err);
       this.onDisconnect();
     });
   }
@@ -184,6 +169,39 @@ class NativeSocket extends SocketBase {
   }
 }
 
+/**
+ * Given binary data, returns the string reprented by it in UTF-8 encoding.
+ * 
+ * @param data The data to be interpreted as a string
+ */
+function dataToString(data: Uint8Array) {
+  // Implementation for a browser environment
+  if (typeof TextDecoder !== 'undefined') {
+    return new TextDecoder().decode(data);
+  }
+
+  // Implementation for node
+  const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return buf.toString();
+}
+
+/**
+ * Encode a string as UTF-8 and write it to a buffer with a specified overall size.
+ * 
+ * @param str The string to write
+ * @param size The overall size of the returned buffer
+ */
+function stringToBinaryPadded(str: string, size: number) {
+  if (typeof TextEncoder !== 'undefined') {
+    const res = new Uint8Array(size);
+    res.set(new TextEncoder().encode(str));
+    return res;
+  }
+
+  const buf = Buffer.alloc(size);
+  buf.write(str);
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+}
 
 /**
  * A descriptor for a process on a device.
@@ -232,7 +250,7 @@ export interface ThreadDescriptor {
   /**
    * Unknown.
    */
-  data: Buffer;
+  data: Uint8Array;
 }
 
 export interface ThreadListResponse {
@@ -290,7 +308,7 @@ export default class NtrClient {
   /**
    * The raw socket used for communication with the 3DS.
    */
-  private sock: Socket;
+  private sock: SocketBase;
 
   /**
    * The cancellation id for the periodic heartbeat.
@@ -308,11 +326,6 @@ export default class NtrClient {
   private disconnectedCallback: (error: boolean) => void;
 
   /**
-   * The raw data stream from the server.
-   */
-  private stream: PullStream;
-
-  /**
    * Create a new NtrClient. In most cases it is preferable to use [[connectNTR]].
    * 
    * @param ip The IPv4 address of the target device
@@ -321,24 +334,13 @@ export default class NtrClient {
    *                             was due to an error
    */
   public constructor(ip: string, connectedCallback: () => void, disconnectedCallback: (error: boolean) => void) {
-    this.sock = connect(8000, ip, () => {
-      this.sock.setNoDelay(true);
-      this.sock.setKeepAlive(true);
-
+    this.sock = new NativeSocket(ip, 8000, () => {
       this.heartbeatId = setInterval(this.heartbeat.bind(this), 1000);
-    });
+    }, disconnectedCallback);
 
     if (typeof connectedCallback === 'function') {
       this.connectedCallback = connectedCallback;
     }
-
-    if (typeof disconnectedCallback === 'function') {
-      this.sock.on('close', disconnectedCallback);
-    }
-    this.sock.on('end', () => {});
-
-    this.stream = new PullStream();
-    this.sock.pipe(this.stream);
 
     this.handleData();
   }
@@ -348,7 +350,7 @@ export default class NtrClient {
    */
   public disconnect() {
     clearInterval(this.heartbeatId);
-    this.sock.end();
+    this.sock.close();
   }
 
   /**
@@ -383,21 +385,22 @@ export default class NtrClient {
    */
   private async handleData() {
     try {
-      const cmdBuf = await this.stream.pullAsync(84);
+      const cmdBufArr = await this.sock.read(84);
+      const cmdBuf = new DataView(cmdBufArr.buffer, cmdBufArr.byteOffset, cmdBufArr.length);
 
-      const magic = cmdBuf.readUInt32LE(0);
-      const seq = cmdBuf.readUInt32LE(4);
-      const type = cmdBuf.readUInt32LE(8);
-      const cmd = cmdBuf.readUInt32LE(12);
+      const magic = cmdBuf.getUint32(0, true);
+      const seq = cmdBuf.getUint32(4, true);
+      const type = cmdBuf.getUint32(8, true);
+      const cmd = cmdBuf.getUint32(12, true);
       const args = new Uint32Array(cmdBuf.buffer, cmdBuf.byteOffset + 16, 16);
-      const dataLen = cmdBuf.readUInt32LE(80);
+      const dataLen = cmdBuf.getUint32(80, true);
 
       if (magic != 0x12345678) {
         return;
       }
 
       if (dataLen !== 0) {
-        const data = await this.stream.pullAsync(dataLen);
+        const data = await this.sock.read(dataLen);
         this.handlePacket(cmd, seq, data);
       } else {
         this.handlePacket(cmd, seq, undefined);
@@ -421,7 +424,7 @@ export default class NtrClient {
    * @param seq The sequence number of the response
    * @param data The response payload
    */
-  private handlePacket(cmd: number, seq: number, data?: Buffer) {
+  private handlePacket(cmd: number, seq: number, data?: Uint8Array) {
     switch (cmd) {
       case 0:
         this.canSendHeartbeat = true;
@@ -429,7 +432,7 @@ export default class NtrClient {
           break;
         }
         const { type } = this.promises[seq];
-        const lines = data !== undefined ? data.toString().match(/^.+$/gm) : [];
+        const lines = data !== undefined ? dataToString(data).match(/^.+$/gm) : [];
         switch(type) {
           case 'processes':
             this.handleProcesses(seq, lines);
@@ -524,13 +527,14 @@ export default class NtrClient {
         const pc = parseInt(m[1], 16);
         const lr = parseInt(m[2], 16);
         const data = lines[i + 2].split(' ');
-        const dataBuf = Buffer.alloc(128);
+        const dataBuf = new Uint8Array(128);
+        const dataBufView = new DataView(dataBuf.buffer, dataBuf.byteOffset, dataBuf.byteLength);
         for (let j = 0; j < 32; ++j) {
           const val = parseInt(data[j], 16);
           if (Number.isNaN(val)) {
             throw null;
           }
-          dataBuf.writeUInt32LE(val, j * 4);
+          dataBufView.setUint32(j * 4, val, true);
         }
         res.threads.push({ tid, pc, lr, data: dataBuf });
       }
@@ -647,7 +651,7 @@ export default class NtrClient {
    * @param seq The sequence number of the reply
    * @param data The raw data received
    */
-  private handleReadMemoryData(seq: number, data: Buffer) {
+  private handleReadMemoryData(seq: number, data: Uint8Array) {
     if (this.promises[seq + 1000] === undefined) {
       return;
     }
@@ -673,16 +677,17 @@ export default class NtrClient {
    * @param dataLen Length of the payload that will be sent
    */
   private sendPacket(type: number, cmd: number, args: number[] = [], dataLen: number) {
-    const buf = Buffer.alloc(84);
-    buf.writeUInt32LE(0x12345678, 0);
-    buf.writeUInt32LE(this.seqNumber, 4);
-    buf.writeUInt32LE(type, 8);
-    buf.writeUInt32LE(cmd, 12);
+    const data = new Uint8Array(84);
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    view.setUint32(0, 0x12345678, true);
+    view.setUint32(4, this.seqNumber,true);
+    view.setUint32(8, type, true);
+    view.setUint32(12, cmd, true);
     for (let i = 0; i < Math.min(16, args.length); ++i) {
-      buf.writeUInt32LE(args[i], 4 * (4 + i));
+      view.setUint32(4 * (4 + i), args[i], true);
     }
-    buf.writeUInt32LE(dataLen, 80);
-    this.sock.write(buf);
+    view.setUint32(80, dataLen, true);
+    this.sock.write(data);
 
     this.seqNumber += 1000;
   }
@@ -693,9 +698,8 @@ export default class NtrClient {
    * @param name The path of the target file
    * @param data The data to be saved
    */
-  public saveFile(name: string, data: Buffer) {
-    const nameBuffer = Buffer.alloc(200);
-    nameBuffer.write(name);
+  public saveFile(name: string, data: Uint8Array) {
+    const nameBuffer = stringToBinaryPadded(name, 200);
     this.sendPacket(1,1, undefined, 200 + data.byteLength);
     this.sock.write(nameBuffer);
     this.sock.write(data);
@@ -736,7 +740,7 @@ export default class NtrClient {
    * @param pid PID
    * @param buf The data to be written
    */
-  public writeMemory(addr: number, pid: number, buf: Buffer) {
+  public writeMemory(addr: number, pid: number, buf: Uint8Array) {
     this.sendPacket(1, 10, [pid, addr, buf.byteLength], buf.byteLength);
     this.sock.write(buf);
   }
@@ -748,7 +752,7 @@ export default class NtrClient {
    * @param size The size of the memory region to read
    * @param pid PID
    */
-  public readMemory(addr: number, size: number, pid: number): Promise<Buffer> {
+  public readMemory(addr: number, size: number, pid: number): Promise<Uint8Array> {
     this.sendPacket(0, 9, [pid, addr, size], 0);
     const seq = this.seqNumber;
     return new Promise((resolve, reject) => {

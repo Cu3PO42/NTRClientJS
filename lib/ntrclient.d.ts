@@ -1,4 +1,3 @@
-/// <reference types="node" />
 export interface ProcessDescriptor {
     pid: number;
     tid: number;
@@ -9,7 +8,7 @@ export interface ThreadDescriptor {
     tid: number;
     pc: number;
     lr: number;
-    data: Buffer;
+    data: Uint8Array;
 }
 export interface ThreadListResponse {
     threads: ThreadDescriptor[];
@@ -28,7 +27,6 @@ export default class NtrClient {
     private heartbeatId;
     private connectedCallback;
     private disconnectedCallback;
-    private stream;
     constructor(ip: string, connectedCallback: () => void, disconnectedCallback: (error: boolean) => void);
     disconnect(): void;
     static connectNTR(ip: string, disconnectedCallback: (error: boolean) => void): Promise<{}>;
@@ -42,12 +40,12 @@ export default class NtrClient {
     private handleReadMemoryText(seq, lines);
     private handleReadMemoryData(seq, data);
     private sendPacket(type, cmd, args, dataLen);
-    saveFile(name: string, data: Buffer): void;
+    saveFile(name: string, data: Uint8Array): void;
     reload(): void;
     hello(): Promise<void>;
     private heartbeat();
-    writeMemory(addr: number, pid: number, buf: Buffer): void;
-    readMemory(addr: number, size: number, pid: number): Promise<Buffer>;
+    writeMemory(addr: number, pid: number, buf: Uint8Array): void;
+    readMemory(addr: number, size: number, pid: number): Promise<Uint8Array>;
     addBreakpoint(addr: number, type: 'always' | 'once'): void;
     disableBreakpoint(id: any): void;
     enableBreakpoint(id: any): void;
