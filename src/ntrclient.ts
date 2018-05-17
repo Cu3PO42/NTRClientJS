@@ -1,5 +1,6 @@
 import { connect, Socket } from 'net';
 import * as PullStream from 'pullstream';
+import { write } from 'fs';
 
 function promisify(fn) {
   return function(...args) {
@@ -14,6 +15,175 @@ function promisify(fn) {
 }
 
 PullStream.prototype.pullAsync = promisify(PullStream.prototype.pull);
+
+/**
+ * A constructor for a generic socket.
+ */
+interface SocketConstructor {
+  /**
+   * Construct a new socket object.
+   * 
+   * @param ip The IP to connect the underlying socket to
+   * @param port The port on which to connect
+   * @param connectedCallback Call this function upon successfull connection to the socket
+   * @param disconnectedCallback Call this function when the socket is disconnected
+   */
+  new (ip: string, port: number, connectedCallback: () => void, disconnectedCallback?: () => void): SocketBase;
+}
+
+/**
+ * Objects of these type store the unresolved promises for SocketBase#read calls.
+ */
+interface StoredPullPromise {
+  /**
+   * The resolve method for the Promise.
+   * 
+   * @param data The data read from the socket
+   */
+  resolve(data: Uint8Array): void;
+
+  /**
+   * The reject method for the Promise.
+   * 
+   * @param err The error due to which the Promise can't be completed
+   */
+  reject(err: Error): void;
+
+  /**
+   * The number of bytes to read for this Promise.
+   */
+  length: number;
+}
+
+/**
+ * An abstract base class for sockets implementing common functionality related to reading a specific number of bytes.
+ */
+abstract class SocketBase {
+  /**
+   * Data that has already been received but not yet read.
+   */
+  private currentBuffer: Uint8Array;
+
+  /**
+   * Promises from calls to read that have not been resolved because not enough data has been received.
+   * They are stored in the order that they will be received.
+   */
+  private nextPromises: StoredPullPromise[]
+
+  /**
+   * Flag indicating whether the socket has been disconnected already.
+   */
+  private disconnected = false;
+
+  /**
+   * A method that must be called internally when the socket disconnects.
+   */
+  protected onDisconnect() {
+    this.disconnected = true;
+    for (const promise of this.nextPromises) {
+      promise.reject(new Error("Connection closed."));
+    }
+    this.nextPromises = [];
+  }
+
+  /**
+   * A method to be called any time new data is received.
+   * It stores the data in the currentBuffer and resolves any stored promises that now have enough data.
+   * 
+   * @param data The received data
+   */
+  protected receiveData(data: Uint8Array) {
+    const newBuffer = new Uint8Array(this.currentBuffer.length + data.length);
+    newBuffer.set(this.currentBuffer);
+    newBuffer.set(data, this.currentBuffer.length);
+    this.currentBuffer = newBuffer;
+
+    let startOffset = 0;
+    while (this.nextPromises.length) {
+      const nextPromise = this.nextPromises[0];
+      if (nextPromise.length <= this.currentBuffer.length) {
+        this.nextPromises.shift();
+        nextPromise.resolve(this.currentBuffer.subarray(startOffset, startOffset + nextPromise.length));
+        startOffset += nextPromise.length;
+      } else {
+        break;
+      }
+    }
+    if (startOffset > 0) {
+      this.currentBuffer = this.currentBuffer.subarray(startOffset);
+    }
+  }
+
+  /**
+   * Receive a specified number of bytes. The Promise will only resolve when enough data has been read.
+   * If enough data has already been stored up, the promise will be resolved immediately.
+   * 
+   * @param bytes The number of bytes to be read
+   */
+  public read(bytes: number) {
+    if (this.nextPromises.length === 0 && bytes <= this.currentBuffer.length) {
+      const res = Promise.resolve(this.currentBuffer.subarray(0, bytes));
+      this.currentBuffer = this.currentBuffer.subarray(bytes);
+      return res;
+    }
+
+    // Check this after checking stored data, so data that has already been received can be read after the socket has closed.
+    if (this.disconnected) {
+      return Promise.reject(new Error("Connection closed."));
+    }
+
+    return new Promise<Uint8Array>((resolve, reject) => {
+      this.nextPromises.push({ resolve, reject, length: bytes });
+    });
+  }
+
+  /**
+   * Send some data to the socket.
+   * 
+   * @param data The data to be sent
+   */
+  public abstract write(data: Uint8Array): void;
+
+  /**
+   * Close the connection of the socket. This operation will first finish ongoing operations.
+   */
+  public abstract close(): void;
+}
+
+/**
+ * An implementation of a Socket through Node's native sockets.
+ */
+class NativeSocket extends SocketBase {
+  private sock: Socket;
+
+  constructor(ip: string, port: number, connectedCallback: () => void, private disconnectedCallback?: () => void) {
+    super();
+    this.sock = connect(port, ip, () => {
+      this.sock.setNoDelay(true);
+      this.sock.setKeepAlive(true);
+
+      connectedCallback();
+    });
+
+    this.sock.on('end', () => {});
+    this.sock.on('data', data => {
+      this.receiveData(new Uint8Array(data.buffer, data.byteOffset, data.length));
+    });
+    this.sock.on('close', () => {
+      if (this.disconnectedCallback) this.disconnectedCallback();
+      this.onDisconnect();
+    });
+  }
+
+  write(data: Uint8Array) {
+    this.sock.write(Buffer.from(data.buffer, data.byteOffset, data.length));
+  }
+
+  close() {
+    this.sock.end();
+  }
+}
+
 
 /**
  * A descriptor for a process on a device.
